@@ -32,12 +32,31 @@ def getDXF():
               and try again.''')
         return None
 
+class Button:
+    def __init__(self, left, top, width, height, label, color): 
+        self.left = left
+        self.top = top
+        self.width = width
+        self.height = height
+        self.label = label
+        self.color = color
+        self.clicked = False
+
+    def isSelected(self, mouseX, mouseY):
+        return (self.left <= mouseX <= self.left + self.width and 
+                self.top <= mouseY <= self.top + self.height)
+
+    def draw(self):
+        drawRect(self.left, self.top, self.width, self.height, fill=self.color)
+        drawLabel(self.label, self.left + self.width/2, self.top + self.height/2,
+                  fill='white', size=self.height/3, bold=True, 
+                  font='Burger Crunchy')
+    
+
 def onAppStart(app):
     #files
     app.file = None
     app.drawableDXF = None
-    app.menu = True
-    app.displayDXF = False
     #drawing
     app.width = 1600
     app.height = 900
@@ -46,17 +65,19 @@ def onAppStart(app):
     app.offsetX = 0
     app.offsetY = 0
     app.scale = 1
+    app.buttons = []
     app.showChecklist = False
-    app.checklist = ['DISPLAY SETUP', 'MATERIAL PROPERTIES', 'MESHING', 
-                     'BOUNDARY CONDITIONS', 'LOADS', 'SOLVE']
-    app.currentStep = -1
+    app.programNames = ['Display Setup', 'Meshing', 'Material Properties', 
+                     'Boundary Conditions', 'Loads', 'Solve']
+    app.buttons = createButtons(app)
+    app.program = 0
 
 def onAppRestart(app):
     #files
     app.file = None
     app.drawableDXF = None
-    app.menu = True
-    app.displayDXF = False
+    #program
+    app.program = -1
     #drawing
     app.cx = app.width/2
     app.cy = app.height/2
@@ -65,12 +86,13 @@ def onAppRestart(app):
     app.scale = 1
     app.startingPointHold = (None, None)
     app.showChecklist = False
-    app.currentStep = -1
 
 def redrawAll(app):
-    drawTitle(app)
-    drawChecklist(app)
-    if app.currentStep == -1:
+    drawRect(0, 0, app.width, app.height, fill=rgb(25, 25, 25))
+    drawRect(1300, 0, 300, app.height, fill=rgb(30, 30, 30))
+    for button in app.buttons:
+        button.draw()
+    if app.program == -1:
         drawRect(app.width/2 - 200, app.height/2 - 75, 400, 150, 
                  fill='lightBlue', border='black')
         drawLabel('2D FEA SOLVER', app.width/2, app.height/2-33, size=30, 
@@ -80,82 +102,86 @@ def redrawAll(app):
     else:
         drawDXF(app)
 
-def drawChecklist(app):
-    if app.currentStep == -1: return
-    drawRect(1250, 100, 300, 300, fill=None, border='black', borderWidth=4)
-    drawLabel('CHECKLIST', 1400, 60, size=30, bold=True)
-    for i in range(6):
-        if i < app.currentStep: color = 'lightGreen'
-        elif i == app.currentStep: color = 'lightYellow'
-        else: color = None
-        drawRect(1250, 100 + i * 50, 300, 50, border='black', fill=color)
-        drawLabel(app.checklist[i], 1400, 125 + i * 50, size=16, bold=True)
+def createButtons(app):
+    buttons = []
+    for i in range(len(app.programNames)):
+        button = Button(1300, 100 + i*50, 300, 50, app.programNames[i], 
+                        rgb(30, 30, 30))
+        buttons.append(button)
+    return buttons
 
-def drawTitle(app):
-    if app.currentStep == -1 or app.currentStep >= len(app.checklist):
-        return
-    else:
-        drawLabel(app.checklist[app.currentStep], app.width/2, 30, size=24, 
-                  bold=True)
-        
-#SOURCE: written by cursory
+
+#SOURCE
 def drawDXF(app):
     if app.drawableDXF == None:
         return
+    edges = dict() #key: edge number; value: list of points that define polygon
+    pointsToEdge = dict() #key: point; value: edge number that point belongs to
     for entity in app.drawableDXF:
-        if entity.dxftype() == 'LINE':
-            start = entity.dxf.start
-            end = entity.dxf.end
-            drawLine(start[0] * app.scale + app.cx + app.offsetX, 
-                     start[1] * app.scale + app.cy + app.offsetY, 
-                     end[0] * app.scale + app.cx + app.offsetX, 
-                     end[1] * app.scale + app.cy + app.offsetY, fill='black')
-        elif entity.dxftype() == 'ARC':
+        if entity.dxftype() == 'CIRCLE':
             center = entity.dxf.center
+            pointsToEdge[center] = len(edges)
             radius = entity.dxf.radius
-            start_angle = math.radians(entity.dxf.start_angle)
-            end_angle = math.radians(entity.dxf.end_angle)
-            drawArc(center[0] * app.scale + app.cx + app.offsetX, 
-                    center[1] * app.scale + app.cy + app.offsetY, 
-                    radius * app.scale, radius * app.scale, 
-                    start_angle, end_angle, fill=None, border='black')
+            drawCircle(app.cx + center[0] * app.scale, app.cy + center[1] 
+                       * app.scale, radius * app.scale, border='black')
+        elif isDrawable(entity):
+            segments = getLineSegments(entity)
+            for segment in segments:
+                p1 = segment.start
+                p2 = segment.end
+                    
+                
+
+        
             
+def isDrawable(entity):
+    if entity.dxftype() in ['LINE', 'LWPOLYLINE', 'POLYLINE', 'ARC', 'SPLINE']:
+        return True
+    return False
+
+def getEdgeNumber(segment):
+    pass
+
+def getEntityPoints(segment):
+    pass
+
 def onKeyPress(app, key):
-    if app.currentStep == 0:
+    if app.program == 0:
         if key == 'up':
             app.scale *= 1.1
         elif key == 'down':
             app.scale /= 1.1
 
 def onMousePress(app, mouseX, mouseY):
-    if app.currentStep == -1:
+    if app.program == -1:
         app.drawableDXF = getDXF()
-        app.currentStep += 1
+        app.program += 1
         app.showChecklist = True
     else:
         if hitsChecklistEntry(app, mouseX, mouseY):
-            app.currentStep += 1
-        if app.currentStep == 0:
+            app.program += 1
+        if app.program == 0:
             app.startingPointHold = (mouseX, mouseY)
 
 def onMouseDrag(app, mouseX, mouseY):
-    if app.currentStep == 0:
+    if app.program == 0:
         startX, startY = app.startingPointHold
         app.offsetX = mouseX - startX
         app.offsetY = mouseY - startY
 
 def onMouseRelease(app, mouseX, mouseY):
-    if app.currentStep == 0:
+    if app.program == 0:
         app.cx += app.offsetX
         app.cy += app.offsetY
         app.offsetX = 0
         app.offsetY = 0
 
-def hitsChecklistEntry(app, mouseX, mouseY):
-     if 1250 <= mouseX <= 1550 and 100 <= mouseY <= 400:
-        index = (mouseY - 100) // 50
-        if 0 <= index < len(app.checklist) and index == app.currentStep:
-            return True
+def onMouseMove(app, mouseX, mouseY):
+    for button in app.buttons:
+        if button.isSelected(mouseX, mouseY):
+            button.color = rgb(50, 50, 50)
+        else:
+            button.color = rgb(30, 30, 30)
 
 def main():
     runApp()
