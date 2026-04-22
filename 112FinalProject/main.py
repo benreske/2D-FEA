@@ -76,15 +76,16 @@ def titleScreen_onScreenActivate(app):
 def solverScreen_onScreenActivate(app):
     app.drawableDXF = getDXF()
     app.buttons = createButtons(app)
-    app.centerPoint = (app.width/2, app.height/2)
-    app.offset = (0, 0)
+    app.cx = app.width/2
+    app.cy = app.height/2
+    app.offsetX = 0
+    app.offsetY = 0
     app.scale = 1
     app.startingPoint = None
     app.allSegments = []
     app.edges = dict() #key: edge number; value:  list of points
     app.circles = dict() #key: circleNum; value: [cx, cy, r]
     assembleEdges(app)
-
 
 def titleScreen_redrawAll(app):
     drawRect(0, 0, app.width, app.height, fill=rgb(25, 25, 25))
@@ -119,8 +120,8 @@ def drawOutlines(app):
              borderWidth=1)
 
 class Segment:
-    def __init__(self, points):
-        self.points = points # list of two tuples
+    def __init__(self, p1, p2):
+        self.points = [p1, p2] # list of two tuples
         self.loadType = None
         self.loadMagnitude = 0
         self.edgeNumber = 0
@@ -147,20 +148,30 @@ def assembleEdges(app):
                     p1, p2 = segment.points
                     addSegment(roundPoint(p1), roundPoint(p2), app.edges, 
                                point_index) #adds segments to edges and point_index dicts
+    
 
 def drawDXF(app):
     for edge in app.edges:
-        points = flatten(app.edges[edge])
+        points = flatten(app, app.edges[edge])
         drawEdge(points)
     for circle in app.circles:
         cx, cy, r = app.circles[circle].cx, app.circles[circle].cy, app.circles[circle].r
-        drawCircle(cx, cy, r, fill=None, border='white', borderWidth=2)
+        drawCircle(cx + app.cx + app.offsetX, cy + app.cy + app.offsetY, 
+                   r * app.scale, fill=None, border='white', borderWidth=2)
+        
+def flatten(app, points):
+    result = []
+    for x, y in points:
+        result.extend([x * app.scale + app.offsetX + app.cx, y * app.scale + 
+                       app.offsetY + app.cy])
+    return result
 
+def drawEdge(points):
+    drawPolygon(*points, fill=None, border='white', borderWidth=2)
 #Source, written by claude.ai
-def roundPoint(p, decimals=6):
+def roundPoint(p, decimals=3):
     scale = 10 ** decimals
-    return (int(p[0] * scale) / scale, int(p[1] * scale) / scale)
-
+    return (math.floor(p[0] * scale) / scale, math.floor(p[1] * scale) / scale)
 #Source: written by claude.ai with modifications
 def addSegment(p1, p2, edges, point_index):
     edgeA = point_index.get(p1)
@@ -179,20 +190,29 @@ def addSegment(p1, p2, edges, point_index):
         # p2 on existing edge, insert p1 at the beginning
         edges[edgeB].insert(0, p1)
         point_index[p1] = edgeB
-    else:
+    elif edgeA != edgeB:
         # merge the two edges
-        if edgeA != edgeB:
-            edges[edgeA].extend(edges[edgeB])
-            for p in edges[edgeB]:
-                point_index[p] = edgeA
-            del edges[edgeB]                    
+        listA = edges[edgeA]
+        listB = edges[edgeB]
+        
+        # make sure p1 is at the end of edgeA and p2 at start of edgeB
+        if listA[-1] != p1:
+            listA.reverse()
+        if listB[0] != p2:
+            listB.reverse()
+        
+        edges[edgeA] = listA + listB
+        for p in listB:
+            point_index[p] = edgeA
+        del edges[edgeB]
+                 
 
 def getSegments(app, entity): #returns list of segments, adds segments to app.segments
     entitySegments = []
     if entity.dxftype() == 'LINE':
         p1 = (entity.dxf.start[0], entity.dxf.start[1])
         p2 = (entity.dxf.end[0], entity.dxf.end[1])
-        segment = Segment([p1, p2])
+        segment = Segment(p1, p2)
         entitySegments.append(segment)
         app.allSegments.append(segment)
     elif entity.dxftype() == 'ARC':
@@ -222,9 +242,8 @@ def isDrawable(entity):
                             'ELLIPSE']:
         return True
     return False
-#Source: written by claude.ai
+#Source: written by claude.ai (EXEMPT)
 def arcToSegments(entity):
-    
     cx = entity.dxf.center.x
     cy = entity.dxf.center.y
     r = entity.dxf.radius
@@ -235,7 +254,9 @@ def arcToSegments(entity):
     if end_angle < start_angle:
         end_angle += 2 * math.pi
     
-    steps = 6
+    arcSpan = end_angle - start_angle
+    steps = max(6, int(arcSpan / (math.pi / 12)))
+
     angles = [start_angle + (end_angle - start_angle) * i / steps for i in range(steps + 1)]
     points = [(cx + r * math.cos(a), cy + r * math.sin(a)) for a in angles]
     
@@ -286,15 +307,6 @@ def ellipseToSegments(entity):
 
     return [Segment(points[i], points[i+1]) for i in range(steps)]
 
-def flatten(points):
-    result = []
-    for x, y in points:
-        result.extend([x, y])
-    return result
-
-def drawEdge(points):
-    drawPolygon(*points, fill=None, border='white', borderWidth=2)
-
 def titleScreen_onMouseMove(app, mouseX, mouseY):
     if app.titleButton.isSelected(mouseX, mouseY):
         app.titleButton.color = 'mediumPurple'
@@ -326,13 +338,14 @@ def titleScreen_onMouseRelease(app, mouseX, mouseY):
 
 def solverScreen_onKeyPress(app, key):
     if app.program == 0:
-        if key == 'up':
+        if key == '+' or key == '=':
             app.scale *= 1.1
-        elif key == 'down':
+        elif key == '-' or key == '_':
             app.scale /= 1.1
 
 def solverScreen_onMousePress(app, mouseX, mouseY):
-    app.startingPoint = mouseX, mouseY
+    if app.program == 0:
+        app.startingPoint = mouseX, mouseY
 
 def solverScreen_onMouseDrag(app, mouseX, mouseY):
     if app.program == 0:
