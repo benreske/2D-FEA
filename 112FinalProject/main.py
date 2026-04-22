@@ -48,8 +48,8 @@ class Button:
 
     def draw(self):
         drawRect(self.left, self.top, self.width, self.height, fill=self.color)
-        drawLabel(self.label, self.left + self.width/2, self.top + self.height/2,
-                  fill='white', size=self.height/3, bold=True, 
+        drawLabel(self.label, self.left + self.width/2, self.top + 
+                  self.height/2, fill='white', size=self.height/3, bold=True, 
                   font='Burger Crunchy')
     
 
@@ -67,8 +67,6 @@ def onAppStart(app):
     app.scale = 1
     app.buttons = []
     app.showChecklist = False
-    app.programNames = ['Display Setup', 'Meshing', 'Material Properties', 
-                     'Boundary Conditions', 'Loads', 'Solve']
     app.buttons = createButtons(app)
     app.program = 0
 
@@ -87,30 +85,48 @@ def onAppRestart(app):
     app.startingPointHold = (None, None)
     app.showChecklist = False
 
-def redrawAll(app):
+def titleScreen_redrawAll(app):
     drawRect(0, 0, app.width, app.height, fill=rgb(25, 25, 25))
-    drawRect(1300, 0, 300, app.height, fill=rgb(30, 30, 30))
+    titleButton = Button(app.width/2 - 150, app.height/2 - 25, 300, 50, 
+                         'CLICK TO START', fill='mediumSlateBlue')
+    titleButton.draw()
+
+
+def redrawAll(app):
+    drawBackground(app)
     for button in app.buttons:
         button.draw()
+    drawOutlines(app)
     if app.program == -1:
         drawRect(app.width/2 - 200, app.height/2 - 75, 400, 150, 
                  fill='lightBlue', border='black')
         drawLabel('2D FEA SOLVER', app.width/2, app.height/2-33, size=30, 
-                  bold=True)
+                  bold=True, font='Burger Crunchy')
         drawLabel('Click to select a DXF file',app.width/2, app.height/2 + 33, 
                   size=16)
     else:
         drawDXF(app)
 
 def createButtons(app):
+    programNames = ['Display Setup', 'Meshing', 'Material Properties', 
+                     'Boundary Conditions', 'Loads', 'Solve']
     buttons = []
-    for i in range(len(app.programNames)):
-        button = Button(1300, 100 + i*50, 300, 50, app.programNames[i], 
-                        rgb(30, 30, 30))
+    for i in range(len(programNames)):
+        button = Button(app.left + app.width - 300, 100 + i*50, 300, 50, 
+                        programNames[i], rgb(30, 30, 30))
         buttons.append(button)
     return buttons
 
-
+def drawBackground(app):
+    drawRect(0, 0, app.width, app.height, fill=rgb(25, 25, 25))
+    drawRect(app.left + app.width - 300, 0, 300, app.height, 
+             fill=rgb(30, 30, 30))
+    
+def drawOutlines(app):
+    drawRect(0, 0, app.width, app.height, fill=None, border=rgb(50, 50, 50), 
+             borderWidth=1)
+    drawRect(app.left + app.width - 300, 0, 300, app.height, fill=None, border=rgb(50, 50, 50), 
+             borderWidth=1)
 #SOURCE
 def drawDXF(app):
     if app.drawableDXF == None:
@@ -145,38 +161,39 @@ def getEdgeNumber(segment):
 def getEntityPoints(segment):
     pass
 
-def onKeyPress(app, key):
+def solverScreen_onKeyPress(app, key):
     if app.program == 0:
         if key == 'up':
             app.scale *= 1.1
         elif key == 'down':
             app.scale /= 1.1
 
-def onMousePress(app, mouseX, mouseY):
-    if app.program == -1:
-        app.drawableDXF = getDXF()
-        app.program += 1
-        app.showChecklist = True
-    else:
-        if hitsChecklistEntry(app, mouseX, mouseY):
-            app.program += 1
-        if app.program == 0:
-            app.startingPointHold = (mouseX, mouseY)
+def titleScreen_onMousePress(app, mouseX, mouseY):
+    #app.drawableDXF = getDXF()
+    #app.program += 1
+    #app.showChecklist = True
+    pass
 
-def onMouseDrag(app, mouseX, mouseY):
+def solverScreen_onMousePress(app, mouseX, mouseY):
+    if hitsChecklistEntry(app, mouseX, mouseY):
+        app.program += 1
+    if app.program == 0:
+        app.startingPointHold = (mouseX, mouseY)
+
+def solverScreen_onMouseDrag(app, mouseX, mouseY):
     if app.program == 0:
         startX, startY = app.startingPointHold
         app.offsetX = mouseX - startX
         app.offsetY = mouseY - startY
 
-def onMouseRelease(app, mouseX, mouseY):
+def solverScreen_onMouseRelease(app, mouseX, mouseY):
     if app.program == 0:
         app.cx += app.offsetX
         app.cy += app.offsetY
         app.offsetX = 0
         app.offsetY = 0
 
-def onMouseMove(app, mouseX, mouseY):
+def solverScreen_onMouseMove(app, mouseX, mouseY):
     for button in app.buttons:
         if button.isSelected(mouseX, mouseY):
             button.color = rgb(50, 50, 50)
@@ -184,6 +201,6 @@ def onMouseMove(app, mouseX, mouseY):
             button.color = rgb(30, 30, 30)
 
 def main():
-    runApp()
+    runAppWithScreens(initialScreen='titleScreen')
 
 main()
