@@ -442,7 +442,6 @@ def getRadiusEndpoint(cx, cy, r, theta):
 #Meshing code
 #Source: claude.ai, general info: https://www.cs.cmu.edu/~quake/triangle.html
 def createMesh(app):
-
     meshDict = dict()
     boundaryEdges = []
     holeEdges = []
