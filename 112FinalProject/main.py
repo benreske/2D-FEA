@@ -467,7 +467,7 @@ def createMesh(app):
 
 def isHoleEdge(app, edge1):
     for edge in app.edges:
-        if edge != edge1 and edge.contains(edge1):
+        if edge != edge1 and app.edges[edge].contains(edge1):
             return True
     return False
 
