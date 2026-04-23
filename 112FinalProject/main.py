@@ -1,3 +1,5 @@
+from unittest import result
+
 from cmu_graphics import *
 from cmu_cpcs_utils import *
 import math
@@ -6,6 +8,8 @@ import ezdxf
 import sys
 import tkinter as tk
 from tkinter import filedialog
+import triangle as tr
+from shapely.geometry import Polygon
 
 ##SOURCE: claude.ai written code for tkinter
 def getFilePath():
@@ -15,7 +19,6 @@ def getFilePath():
                                           filetypes=[('DXF files', '*.dxf')])
     root.destroy()
     return filePath
-
 ##SOURCE: partially written by https://ezdxf.readthedocs.io/en/stable/tutorials/getting_data.html
 def getDXF():
     filePath = getFilePath()
@@ -33,25 +36,67 @@ def getDXF():
         return None
 
 class Button:
-    def __init__(self, left, top, width, height, label, color): 
+    def __init__(self, left, top, width, height, label, color, id): 
         self.left = left
         self.top = top
         self.width = width
         self.height = height
         self.label = label
         self.color = color
-        self.clicked = False
+        self.id = id
+        self.border = None
+        self.textColor = 'white'
+        self.opacity = 100
+        self.isHovering = False
 
     def isSelected(self, mouseX, mouseY):
         return (self.left <= mouseX <= self.left + self.width and 
                 self.top <= mouseY <= self.top + self.height)
 
     def draw(self):
-        drawRect(self.left, self.top, self.width, self.height, fill=self.color)
+        drawRect(self.left, self.top, self.width, self.height, fill=self.color,
+                 border=self.border, opacity=self.opacity)
         drawLabel(self.label, self.left + self.width/2, self.top + 
-                  self.height/2, fill='white', size=self.height/3, bold=True, 
+                  self.height/2, fill=self.textColor, size=self.height/3, bold=True, 
                   font='Burger Crunchy')
+
+class Segment:
+    def __init__(self, p1, p2):
+        self.points = [p1, p2] # list of two tuples
+        self.loadType = None
+        self.loadMagnitude = 0
+        self.edgeNumber = 0
+
+class Node:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.onSegment = False
+        self.segments = []
+
+class Element:
+    def __init__(self, node1, node2, node3):
+        self.nodes = [node1, node2, node3]
+        self.matrix = None
     
+    def draw(self):
+        points = self.unpackNodes(self.nodes)
+        drawPolygon(*points, fill=None, border='cyan', borderWidth=1)
+    
+    @staticmethod
+    def unpackNodes(nodes):
+        result = []
+        for node in nodes:
+            result.extend([node.x, node.y])
+        return result
+
+class Node:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.displacementX = 0
+        self.displacementY = 0
+
 def onAppStart(app):
     #files
     app.file = None
@@ -71,10 +116,13 @@ def onAppRestart(app):
 
 def titleScreen_onScreenActivate(app):
     app.titleButton = Button(app.width/2 - 350, app.height/2 - 50, 700, 100, 
-                             'FEA 2D SOLVER: CLICK TO START', 'mediumSlateBlue')
+                             'FEA 2D SOLVER: CLICK TO START', 'mediumSlateBlue', 
+                             -1)
 
 def solverScreen_onScreenActivate(app):
+    #files
     app.drawableDXF = getDXF()
+    #drawing
     app.buttons = createButtons(app)
     app.cx = app.width/2
     app.cy = app.height/2
@@ -82,84 +130,129 @@ def solverScreen_onScreenActivate(app):
     app.offsetY = 0
     app.scale = 1
     app.startingPoint = None
-    app.allSegments = []
+    #data
     app.edges = dict() #key: edge number; value:  list of points
-    app.circles = dict() #key: circleNum; value: [cx, cy, r]
+    app.allSegments = []
+    app.nodes = []
+    app.elements = []
+    app.materials = []
+    app.selectedMaterial = None
+    app.fixedBoundaries = [] #list of fixed segments
+    app.forceMagnitude = 0
+    app.forceDirection = (0, 0)
+    #collect data from dxf file and organize into edges and circles
     assembleEdges(app)
-
+    #Program Manager
+    app.isMeshed = False
+    def allRequirementsReady():
+        return (app.isMeshed and app.selectedMaterial != None and
+                app.fixedBoundaries != [] and app.forceMagnitude != 0)
+    app.programRequirements = {0: False,
+                               1: app.isMeshed,
+                               2: app.selectedMaterial != None,
+                               3: app.fixedBoundaries != [],
+                               4: app.forceMagnitude != 0,
+                               5: allRequirementsReady()                
+                              }
 def titleScreen_redrawAll(app):
     drawRect(0, 0, app.width, app.height, fill=rgb(25, 25, 25))
     app.titleButton.draw()
 
 def solverScreen_redrawAll(app):
     drawBackground(app)
-    for button in app.buttons:
-        button.draw()
-    drawOutlines(app)
     drawDXF(app)
+    drawSidebar(app)
+    drawInstructions(app)
+    drawUniqueFeatures(app)
+    drawOutlines(app)
 
 def createButtons(app):
     programNames = ['Display Setup', 'Meshing', 'Material Properties', 
                      'Boundary Conditions', 'Loads', 'Solve']
     buttons = []
     for i in range(len(programNames)):
-        button = Button(app.left + app.width - 300, 100 + i*50, 300, 50, 
-                        programNames[i], rgb(30, 30, 30))
+        button = Button(app.left + app.width - 300, i*50, 300, 50, 
+                        programNames[i], rgb(30, 30, 30), i)
         buttons.append(button)
     return buttons
 
 def drawBackground(app):
     drawRect(0, 0, app.width, app.height, fill=rgb(25, 25, 25))
+
+def drawSidebar(app):
     drawRect(app.left + app.width - 300, 0, 300, app.height, 
              fill=rgb(30, 30, 30))
-    
+    for button in app.buttons:
+        if button.id == app.program: #selected stage takes precedence
+            button.color = 'yellow'
+            button.opacity = 90
+            button.textColor = 'black'
+        elif app.programRequirements[button.id]: #finished requirements
+            button.color = 'limeGreen'
+            button.opacity = 90
+            button.textColor = 'black'
+        elif button.isHovering: #then highlight the hovering button
+            button.color = rgb(50, 50, 50)
+        else: #all other buttons
+            button.color = rgb(30, 30, 30)
+            button.opacity = 100
+            button.textColor = 'white'
+        if not app.isMeshed and button.id >= 2: #gray out buttons that aren't accessible
+            button.textColor = rgb(90, 90, 90)
+        button.draw()
+
+def drawInstructions(app):
+    textColor = 'lightSteelBlue'
+    drawLabel('Instructions:', app.left + app.width - 150, 400, italic=True,
+              fill=textColor, bold=True, size=27, font='Burger Crunchy')
+    if app.program == 0:
+        drawLabel('Drag and Resize Shape', app.left + app.width - 150, 450, 
+                  fill=textColor, font='Burger Crunchy', size=22)
+    elif app.program == 1:
+        drawLabel('Drag slider to change', app.left + app.width - 150, 450, 
+                  fill=textColor, font='Burger Crunchy', size=22)
+        drawLabel('element size', app.left + app.width - 150, 490, 
+                  fill=textColor, font='Burger Crunchy', size=22)
+        drawLabel("Press 'mesh' when ready", app.left + app.width - 150, 530,
+                  fill=textColor, font='Burger Crunchy', size=22)
+    elif app.program == 2:
+        drawLabel('Select type of Material', app.left + app.width - 150, 450, 
+                  fill=textColor, font='Burger Crunchy', size=22)
+    elif app.program == 3:
+        drawLabel('Click or drag to select', app.left + app.width - 150, 450, 
+                  fill=textColor, font='Burger Crunchy', size=22)
+        drawLabel('fixed edges', app.left + app.width - 150, 490, 
+                  fill=textColor, font='Burger Crunchy', size=22)
+    elif app.program == 4:
+        drawLabel("Press 'solve' when ready", app.left + app.width - 150, 450, 
+                  fill=textColor, font='Burger Crunchy', size=22)
+
+def drawUniqueFeatures(app):
+    pass
 def drawOutlines(app):
     drawRect(0, 0, app.width, app.height, fill=None, border=rgb(50, 50, 50), 
              borderWidth=1)
     drawRect(app.left + app.width - 300, 0, 300, app.height, fill=None, border=rgb(50, 50, 50), 
              borderWidth=1)
-
-class Segment:
-    def __init__(self, p1, p2):
-        self.points = [p1, p2] # list of two tuples
-        self.loadType = None
-        self.loadMagnitude = 0
-        self.edgeNumber = 0
-
-class Circle:
-    def __init__(self, cx, cy, r):
-        self.cx = cx
-        self.cy = cy
-        self.r = r
-
+##Start of drawing DXF code
 def assembleEdges(app):
     if app.drawableDXF == None: #no dxf file selected
         return
     point_index = dict() #key: point; value: edge # that includes points
     for entity in app.drawableDXF:
-        if entity.dxftype() == 'CIRCLE':
-            center = entity.dxf.center
-            radius = entity.dxf.radius
-            app.circles[len(app.circles)] = Circle(center[0], center[1], radius)
-        else:
-            segments = getSegments(app, entity) #also adds segments to app.segments
-            if segments != None:
-                for segment in segments:
-                    p1, p2 = segment.points
-                    addSegment(roundPoint(p1), roundPoint(p2), app.edges, 
-                               point_index) #adds segments to edges and point_index dicts
+        segments = getSegments(app, entity) #also adds segments to app.segments
+        if segments != None:
+            for segment in segments:
+                p1, p2 = segment.points
+                addSegment(roundPoint(p1), roundPoint(p2), app.edges, 
+                           point_index) #adds segments to edges and point_index dicts
     
-
 def drawDXF(app):
     for edge in app.edges:
-        points = flatten(app, app.edges[edge])
+        points = flattenEdges(app, app.edges[edge])
         drawEdge(points)
-    for circle in app.circles:
-        cx, cy, r = app.circles[circle].cx, app.circles[circle].cy, app.circles[circle].r
-        drawCircle(cx + app.cx + app.offsetX, cy + app.cy + app.offsetY, 
-                   r * app.scale, fill=None, border='white', borderWidth=2)
         
-def flatten(app, points):
+def flattenEdges(app, points):
     result = []
     for x, y in points:
         result.extend([x * app.scale + app.offsetX + app.cx, y * app.scale + 
@@ -206,7 +299,6 @@ def addSegment(p1, p2, edges, point_index):
             point_index[p] = edgeA
         del edges[edgeB]
                  
-
 def getSegments(app, entity): #returns list of segments, adds segments to app.segments
     entitySegments = []
     if entity.dxftype() == 'LINE':
@@ -233,6 +325,10 @@ def getSegments(app, entity): #returns list of segments, adds segments to app.se
         app.allSegments.extend(segments)
     elif entity.dxftype() == 'ELLIPSE':
         segments = ellipseToSegments(entity)
+        entitySegments.extend(segments)
+        app.allSegments.extend(segments)
+    elif entity.dxftype() == 'CIRCLE':
+        segments = circleToEdges(entity)
         entitySegments.extend(segments)
         app.allSegments.extend(segments)
     return entitySegments
@@ -307,45 +403,107 @@ def ellipseToSegments(entity):
 
     return [Segment(points[i], points[i+1]) for i in range(steps)]
 
+def circleToEdges(entity):
+    segments = []
+    cx = entity.dxf.center.x
+    cy = entity.dxf.center.y
+    r = entity.dxf.radius
+    points = 16
+    for i in range(points):
+        angle1 = 2 * math.pi * (i/points) #step size
+        angle2 = 2 * math.pi * ((i+1)/points) #1 step over
+        p1 = getRadiusEndpoint(cx, cy, r, angle1)
+        p2 = getRadiusEndpoint(cx, cy, r, angle2)
+        segments.append(Segment(p1, p2))
+    return segments
+#Source: CS academy
+def getRadiusEndpoint(cx, cy, r, theta):
+    return (cx + r*math.cos(theta),
+            cy - r*math.sin(theta))
+#end of drawing DXF code
+#Meshing code
+#Source: claude.ai, general info: https://www.cs.cmu.edu/~quake/triangle.html
+def createMesh(app):
+
+    meshDict = dict()
+    boundaryEdges = []
+    holeEdges = []
+    for edge in app.edges:
+        if isHoleEdge(app, app.edges[edge]):
+            holeEdges.append(edge)
+        else:
+            boundaryEdges.append(edge)
+    
+    meshDict['vertices'] = boundaryEdges
+    meshDict['holes'] = holeEdges
+
+    nodesList, trianglesList = tr.triangulate(meshDict, 'pq30a0.5')
+    for points in nodesList:
+        node = Node(points[0], points[1])
+        app.nodes.append(node)
+    for triangle in trianglesList:
+        node1 = app.nodes[triangle[0]]
+        node2 = app.nodes[triangle[1]]
+        node3 = app.nodes[triangle[2]]
+        element = Element(node1, node2, node3)
+        app.elements.append(element)
+
+def isHoleEdge(app, edge1):
+    for edge in app.edges:
+        if edge != edge1 and edge.contains(edge1):
+            return True
+    return False
+#end of meshing code
 def titleScreen_onMouseMove(app, mouseX, mouseY):
     if app.titleButton.isSelected(mouseX, mouseY):
         app.titleButton.color = 'mediumPurple'
-        app.titleButton.left = app.width/2 - 360
-        app.titleButton.top = app.height/2 - 60
-        app.titleButton.width = 720
-        app.titleButton.height = 120
+        setLargeButtonSize(app)
     else:
         app.titleButton.color = 'mediumSlateBlue'
-        app.titleButton.left = app.width/2 - 350
-        app.titleButton.top = app.height/2 - 50
-        app.titleButton.width = 700
-        app.titleButton.height = 100
+        setDefaultButtonSize(app)
 
 def titleScreen_onMousePress(app, mouseX, mouseY):
     if app.titleButton.isSelected(mouseX, mouseY):
         app.titleButton.color = 'limeGreen'
+
+def setDefaultButtonSize(app):
+    app.titleButton.left = app.width/2 - 350
+    app.titleButton.top = app.height/2 - 50
+    app.titleButton.width = 700
+    app.titleButton.height = 100
+
+def setLargeButtonSize(app):
+    app.titleButton.left = app.width/2 - 360
+    app.titleButton.top = app.height/2 - 60
+    app.titleButton.width = 720
+    app.titleButton.height = 120
 
 def titleScreen_onMouseRelease(app, mouseX, mouseY):
     if app.titleButton.isSelected(mouseX, mouseY):
         setActiveScreen('solverScreen')
     else:
         app.titleButton.color = 'mediumSlateBlue'
-        app.titleButton.color = 'mediumSlateBlue'
-        app.titleButton.left = app.width/2 - 350
-        app.titleButton.top = app.height/2 - 50
-        app.titleButton.width = 700
-        app.titleButton.height = 100
+        setDefaultButtonSize(app)
 
 def solverScreen_onKeyPress(app, key):
-    if app.program == 0:
+    if app.program == 0 and not app.isMeshed:
         if key == '+' or key == '=':
             app.scale *= 1.1
         elif key == '-' or key == '_':
             app.scale /= 1.1
 
 def solverScreen_onMousePress(app, mouseX, mouseY):
-    if app.program == 0:
+    for button in app.buttons:
+        if button.isSelected(mouseX, mouseY) and button.id != app.program:
+            app.programRequirements[0] = True #make first button green
+            if not app.isMeshed and button.id < 2:
+                app.program = button.id
+            elif app.isMeshed:
+                app.program = button.id
+    #drawing setup
+    if app.program == 0 and not app.isMeshed:
         app.startingPoint = mouseX, mouseY
+    #mesh
 
 def solverScreen_onMouseDrag(app, mouseX, mouseY):
     if app.program == 0:
@@ -359,13 +517,16 @@ def solverScreen_onMouseRelease(app, mouseX, mouseY):
         app.cy += app.offsetY
         app.offsetX = 0
         app.offsetY = 0
-
+    
 def solverScreen_onMouseMove(app, mouseX, mouseY):
     for button in app.buttons:
-        if button.isSelected(mouseX, mouseY):
-            button.color = rgb(50, 50, 50)
+        if button.isSelected(mouseX, mouseY) and button.id != app.program:
+            if not app.isMeshed and button.id < 2:
+                button.isHovering = True
+            elif app.isMeshed:
+                button.isHovering = True
         else:
-            button.color = rgb(30, 30, 30)
+            button.isHovering = False
 
 def main():
     runAppWithScreens(initialScreen='titleScreen')
