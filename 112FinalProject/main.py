@@ -471,6 +471,7 @@ def isHoleEdge(app, edge1):
         if edge != edge1 and edge.contains(edge1):
             return True
     return False
+
 #end of meshing code
 def titleScreen_onMouseMove(app, mouseX, mouseY):
     if app.titleButton.isSelected(mouseX, mouseY):
