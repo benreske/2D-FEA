@@ -1,15 +1,12 @@
-from unittest import result
-
 from cmu_graphics import *
 from cmu_cpcs_utils import *
 import math
-import random
 import ezdxf
-import sys
 import tkinter as tk
 from tkinter import filedialog
 import triangle as tr
 from shapely.geometry import Polygon
+from shapely.ops import unary_union
 
 ##SOURCE: claude.ai written code for tkinter
 def getFilePath():
@@ -80,8 +77,10 @@ class Element:
         self.nodes = [node1, node2, node3]
         self.matrix = None
     
-    def draw(self):
-        points = self.unpackNodes(self.nodes)
+    def draw(self, app):
+        initialPoints = [(self.nodes[0].x, self.nodes[0].y), (self.nodes[1].x, 
+                        self.nodes[1].y), (self.nodes[2].x, self.nodes[2].y)]
+        points = flattenDraw(app, initialPoints)
         drawPolygon(*points, fill=None, border='cyan', borderWidth=1)
     
     @staticmethod
@@ -90,7 +89,7 @@ class Element:
         for node in nodes:
             result.extend([node.x, node.y])
         return result
-
+    
 class Node:
     def __init__(self, x, y):
         self.x = x
@@ -138,6 +137,7 @@ def solverScreen_onScreenActivate(app):
     app.allSegments = []
     app.nodes = []
     app.elements = []
+    app.currentMeshElements = rounded(getCurrentMeshElements(app))
     app.materials = []
     app.selectedMaterial = None
     app.fixedBoundaries = [] #list of fixed segments
@@ -150,13 +150,10 @@ def solverScreen_onScreenActivate(app):
     def allRequirementsReady():
         return (app.isMeshed and app.selectedMaterial != None and
                 app.fixedBoundaries != [] and app.forceMagnitude != 0)
-    app.programRequirements = {0: False,
-                               1: app.isMeshed,
-                               2: app.selectedMaterial != None,
-                               3: app.fixedBoundaries != [],
-                               4: app.forceMagnitude != 0,
-                               5: allRequirementsReady()                
-                              }
+    app.programRequirements = [False, app.isMeshed, app.selectedMaterial != None,
+                               app.fixedBoundaries != [], app.forceMagnitude != 0,
+                               allRequirementsReady()]
+    
 def titleScreen_redrawAll(app):
     drawRect(0, 0, app.width, app.height, fill=rgb(25, 25, 25))
     app.titleButton.draw()
@@ -168,7 +165,10 @@ def solverScreen_redrawAll(app):
     drawInstructions(app)
     drawUniqueFeatures(app)
     drawOutlines(app)
+    if app.isMeshed and app.program == 1:
+        drawMesh(app)
 
+#drawing functions
 def createMenuButtons(app): #creates all buttons, returns main menu buttons
     programNames = ['Display Setup', 'Meshing', 'Material Properties', 
                      'Boundary Conditions', 'Loads', 'Solve']
@@ -228,6 +228,9 @@ def drawInstructions(app):
                   fill=textColor, font='Burger Crunchy', size=22)
         drawLabel("Press 'mesh' when ready", app.left + app.width - 150, 530,
                   fill=textColor, font='Burger Crunchy', size=22)
+        drawLabel(f'Mesh Elements: {app.currentMeshElements}', app.left + 
+                  app.width - 500, 30, size=14, font='Burger Crunchy', 
+                  fill=textColor)
     elif app.program == 2:
         drawLabel('Select type of Material', app.left + app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
@@ -237,7 +240,12 @@ def drawInstructions(app):
         drawLabel('fixed edges', app.left + app.width - 150, 490, 
                   fill=textColor, font='Burger Crunchy', size=22)
     elif app.program == 4:
-        drawLabel("Press 'solve' when ready", app.left + app.width - 150, 450, 
+        drawLabel("Press which edge to load", app.left + app.width - 150, 450, 
+                  fill=textColor, font='Burger Crunchy', size=22)
+        drawLabel("and type in magnitude (N)", app.left + app.width - 150, 490, 
+                  fill=textColor, font='Burger Crunchy', size=22)
+    elif app.program == 5:
+        drawLabel("Press 'solve' to solve!", app.left + app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
 
 def drawUniqueFeatures(app):
@@ -252,7 +260,25 @@ def drawOutlines(app):
              borderWidth=1)
     drawRect(app.left + app.width - 300, 0, 300, app.height, fill=None, border=rgb(50, 50, 50), 
              borderWidth=1)
-##Start of drawing DXF code
+
+def flattenDraw(app, points):
+    result = []
+    for x, y in points:
+        result.extend([x * app.scale + app.offsetX + app.cx, y * app.scale + 
+                       app.offsetY + app.cy])
+    return result
+
+def drawMesh(app):
+    for element in app.elements:
+        element.draw(app)
+
+def drawDXF(app):
+    for edge in app.edges:
+        points = flattenDraw(app, app.edges[edge])
+        drawPolygon(*points, fill=None, border='white', borderWidth=2)  
+
+
+#Assembling DXF
 def assembleEdges(app):
     if app.drawableDXF == None: #no dxf file selected
         return
@@ -264,21 +290,11 @@ def assembleEdges(app):
                 p1, p2 = segment.points
                 addSegment(roundPoint(p1), roundPoint(p2), app.edges, 
                            point_index) #adds segments to edges and point_index dicts
-    
-def drawDXF(app):
     for edge in app.edges:
-        points = flattenEdges(app, app.edges[edge])
-        drawEdge(points)
-        
-def flattenEdges(app, points):
-    result = []
-    for x, y in points:
-        result.extend([x * app.scale + app.offsetX + app.cx, y * app.scale + 
-                       app.offsetY + app.cy])
-    return result
-
-def drawEdge(points):
-    drawPolygon(*points, fill=None, border='white', borderWidth=2)
+        edgePoints = app.edges[edge]
+        simplifiedPolygon = Polygon(edgePoints).simplify(tolerance=0.5)
+        simplifiedPoints = list(simplifiedPolygon.exterior.coords)
+        app.edges[edge] = simplifiedPoints
 #Source, written by claude.ai
 def roundPoint(p, decimals=3):
     scale = 10 ** decimals
@@ -428,8 +444,8 @@ def circleToEdges(entity):
     r = entity.dxf.radius
     points = 16
     for i in range(points):
-        angle1 = 2 * math.pi * (i/points) #step size
-        angle2 = 2 * math.pi * ((i+1)/points) #1 step over
+        angle1 = 2 * math.pi * (i/points)
+        angle2 = 2 * math.pi * ((i+1)/points) # 1 step over
         p1 = getRadiusEndpoint(cx, cy, r, angle1)
         p2 = getRadiusEndpoint(cx, cy, r, angle2)
         segments.append(Segment(p1, p2))
@@ -438,23 +454,29 @@ def circleToEdges(entity):
 def getRadiusEndpoint(cx, cy, r, theta):
     return (cx + r*math.cos(theta),
             cy - r*math.sin(theta))
-#end of drawing DXF code
-#Meshing code
-#Source: claude.ai, general info: https://www.cs.cmu.edu/~quake/triangle.html
+
+
+#Meshing
+#Source: partially claude.ai, general info: https://www.cs.cmu.edu/~quake/triangle.html
 def createMesh(app):
     meshDict = dict()
-    boundaryEdges = []
-    holeEdges = []
+    vertices = []
+    segments = []
+    holes = []
     for edge in app.edges:
-        if isHoleEdge(app, app.edges[edge]):
-            holeEdges.append(edge)
-        else:
-            boundaryEdges.append(edge)
-    
-    meshDict['vertices'] = boundaryEdges
-    meshDict['holes'] = holeEdges
-
-    nodesList, trianglesList = tr.triangulate(meshDict, 'pq30a0.5')
+        edgePoints = app.edges[edge]
+        segments += (getVertexIndices(edgePoints, len(vertices)))
+        vertices += edgePoints
+        if isHoleEdge(app, edgePoints):
+            centroid = Polygon(edgePoints).centroid
+            holes.append([centroid.x, centroid.y])
+    meshDict['vertices'] = vertices
+    meshDict['segments'] = segments
+    if holes != []:
+        meshDict['holes'] = holes # points to treat as holes
+    meshSize = getMeshSize(app)
+    meshResult = tr.triangulate(meshDict, f'pq30a{meshSize}')
+    trianglesList, nodesList = meshResult['triangles'], meshResult['vertices']
     for points in nodesList:
         node = Node(points[0], points[1])
         app.nodes.append(node)
@@ -465,13 +487,44 @@ def createMesh(app):
         element = Element(node1, node2, node3)
         app.elements.append(element)
 
-def isHoleEdge(app, edge1):
+def getVertexIndices(pointsList, startIndex):
+    result = []
+    for i in range(len(pointsList)):
+        if i < len(pointsList) - 1: #not the last entry
+            result.append([i + startIndex, i + startIndex + 1])
+        else: # last entry
+            result.append([i + startIndex, startIndex])
+    return result
+
+def isHoleEdge(app, edgePoints):
+    polygon1 = Polygon(edgePoints)
     for edge in app.edges:
-        if edge != edge1 and app.edges[edge].contains(edge1):
+        polygon2 = Polygon(app.edges[edge])
+        if polygon1 != polygon2 and polygon2.contains(polygon1):
             return True
     return False
 
-#end of meshing code
+def getMeshSize(app):
+    area = 0
+    for edge in app.edges:
+        edgePoints = app.edges[edge]
+        if isHoleEdge(app, edgePoints):
+            area -= Polygon(edgePoints).area
+        else:
+            area += Polygon(edgePoints).area
+    #1500 max elements, minSize = area / 1500
+    #50 min elements, maxSize = area / 50
+    #scale value is 5.28 from 0-180 to 50-1000
+    numElements = getCurrentMeshElements(app)
+    meshSize = area/numElements
+    print(f'Area: {area}, MeshSize: {meshSize}, numElements: {numElements}')
+    return meshSize
+
+def getCurrentMeshElements(app):
+    currX = app.sliderButton.left - 999 #1 minimum
+    return 50 + 5.28 * currX
+
+#Controllers
 def titleScreen_onMouseMove(app, mouseX, mouseY):
     if app.titleButton.isSelected(mouseX, mouseY):
         app.titleButton.color = 'mediumPurple'
@@ -525,8 +578,10 @@ def solverScreen_onMousePress(app, mouseX, mouseY):
     elif app.program == 1:
         if app.sliderButton.isSelected(mouseX, mouseY):
             app.sliderButton.isHovering = True #used like isDragging for the slider button
-        elif app.meshButton.isSelected(mouseX, mouseY):
+        elif app.meshButton.isSelected(mouseX, mouseY) and not app.isMeshed:
             createMesh(app)
+            app.isMeshed = True
+            app.meshButton.color = rgb(50, 50, 50)
 
 def solverScreen_onMouseDrag(app, mouseX, mouseY):
     if app.program == 0 and not app.isMeshed:
@@ -541,6 +596,7 @@ def solverScreen_onMouseDrag(app, mouseX, mouseY):
                 app.sliderButton.left = 1180
             else:
                 app.sliderButton.left = mouseX - 10
+            app.currentMeshElements = rounded(getCurrentMeshElements(app)) #change when it drags
 
 def solverScreen_onMouseRelease(app, mouseX, mouseY):
     if app.program == 0 and not app.isMeshed:
