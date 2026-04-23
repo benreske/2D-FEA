@@ -56,9 +56,10 @@ class Button:
     def draw(self):
         drawRect(self.left, self.top, self.width, self.height, fill=self.color,
                  border=self.border, opacity=self.opacity)
-        drawLabel(self.label, self.left + self.width/2, self.top + 
-                  self.height/2, fill=self.textColor, size=self.height/3, bold=True, 
-                  font='Burger Crunchy')
+        if self.label != None:
+            drawLabel(self.label, self.left + self.width/2, self.top + 
+                      self.height/2, fill=self.textColor, size=self.height/3, 
+                      bold=True, font='Burger Crunchy')
 
 class Segment:
     def __init__(self, p1, p2):
@@ -123,13 +124,15 @@ def solverScreen_onScreenActivate(app):
     #files
     app.drawableDXF = getDXF()
     #drawing
-    app.buttons = createButtons(app)
+    app.buttons = createMenuButtons(app)
+    createOtherButtons(app)
     app.cx = app.width/2
     app.cy = app.height/2
     app.offsetX = 0
     app.offsetY = 0
     app.scale = 1
     app.startingPoint = None
+    app.meshElementCounter = None
     #data
     app.edges = dict() #key: edge number; value:  list of points
     app.allSegments = []
@@ -166,7 +169,7 @@ def solverScreen_redrawAll(app):
     drawUniqueFeatures(app)
     drawOutlines(app)
 
-def createButtons(app):
+def createMenuButtons(app): #creates all buttons, returns main menu buttons
     programNames = ['Display Setup', 'Meshing', 'Material Properties', 
                      'Boundary Conditions', 'Loads', 'Solve']
     buttons = []
@@ -175,6 +178,14 @@ def createButtons(app):
                         programNames[i], rgb(30, 30, 30), i)
         buttons.append(button)
     return buttons
+
+def createOtherButtons(app):
+    app.meshButton = Button(app.left + app.width - 300, 800, 300, 50, 'MESH!',
+                            'limeGreen', 6)
+    app.sliderButton = Button(app.left + app.width - 510, 50, 20, 20, None,
+                              rgb(75, 75, 75), 7)
+    app.solveButton = Button(app.left + app.width - 300, 800, 300, 50, 'SOLVE!',
+                            'limeGreen', 6)
 
 def drawBackground(app):
     drawRect(0, 0, app.width, app.height, fill=rgb(25, 25, 25))
@@ -208,6 +219,8 @@ def drawInstructions(app):
     if app.program == 0:
         drawLabel('Drag and Resize Shape', app.left + app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
+        drawLabel('-/+ to change size', app.left + app.width - 150, 490, 
+                  fill=textColor, font='Burger Crunchy', size=22)
     elif app.program == 1:
         drawLabel('Drag slider to change', app.left + app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
@@ -228,7 +241,12 @@ def drawInstructions(app):
                   fill=textColor, font='Burger Crunchy', size=22)
 
 def drawUniqueFeatures(app):
-    pass
+    if app.program == 1:
+        app.meshButton.draw()
+        drawRect(app.left + app.width - 600, 50, 200, 20, fill=rgb(150, 150, 
+                 150))
+        app.sliderButton.draw()
+
 def drawOutlines(app):
     drawRect(0, 0, app.width, app.height, fill=None, border=rgb(50, 50, 50), 
              borderWidth=1)
@@ -504,19 +522,34 @@ def solverScreen_onMousePress(app, mouseX, mouseY):
     if app.program == 0 and not app.isMeshed:
         app.startingPoint = mouseX, mouseY
     #mesh
+    elif app.program == 1:
+        if app.sliderButton.isSelected(mouseX, mouseY):
+            app.sliderButton.isHovering = True #used like isDragging for the slider button
+        elif app.meshButton.isSelected(mouseX, mouseY):
+            createMesh(app)
 
 def solverScreen_onMouseDrag(app, mouseX, mouseY):
-    if app.program == 0:
+    if app.program == 0 and not app.isMeshed:
         startX, startY =app.startingPoint
         app.offsetX = mouseX - startX
         app.offsetY = mouseY - startY
+    if app.program == 1:
+        if app.sliderButton.isHovering:
+            if mouseX < 1000:
+                app.sliderButton.left = 1000
+            elif mouseX > 1190:
+                app.sliderButton.left = 1180
+            else:
+                app.sliderButton.left = mouseX - 10
 
 def solverScreen_onMouseRelease(app, mouseX, mouseY):
-    if app.program == 0:
+    if app.program == 0 and not app.isMeshed:
         app.cx += app.offsetX
         app.cy += app.offsetY
         app.offsetX = 0
         app.offsetY = 0
+    if app.program == 1:
+        app.sliderButton.isHovering = False
     
 def solverScreen_onMouseMove(app, mouseX, mouseY):
     for button in app.buttons:
