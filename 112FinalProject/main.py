@@ -2,13 +2,12 @@ from cmu_graphics import *
 from cmu_cpcs_utils import *
 import math
 import ezdxf
-import sys
+import numpy as np
 import tkinter as tk
 from tkinter import filedialog
 import triangle as tr
 from shapely.geometry import Polygon, Point, LineString
 from shapely.ops import unary_union
-import turtle
 
 ##SOURCE: claude.ai written code for tkinter
 def getFilePath():
@@ -69,12 +68,23 @@ class Segment:
 class Element:
     def __init__(self, node1, node2, node3):
         self.nodes = [node1, node2, node3]
-        self.matrix = None
+        self.stressX = 0
+        self.stressY = 0
+        self.stressXY = 0
+        self.vonMises = 0
     
     def draw(self, app):
         initialPoints = [(node.x, node.y) for node in self.nodes]
         points = flattenDraw(app, initialPoints)
-        drawPolygon(*points, fill=None, border='cyan', borderWidth=1)
+        #source: claude.ai
+        if app.maxVonMises != None and app.maxVonMises != app.minVonMises: #no zero division
+            t = (self.vonMises - app.minVonMises) / (app.maxVonMises - 
+                                                     app.minVonMises) #calculates spot on scale
+            r = int(255 * t) #scales colors accordingly
+            b = int(255 * (1 - t))
+            drawPolygon(*points, fill=rgb(r, 0, b), border=None)
+        else:
+            drawPolygon(*points, fill=None, border='cyan', borderWidth=1)
     
 class Node:
     def __init__(self, x, y):
@@ -91,6 +101,7 @@ def onAppStart(app):
     #drawing
     app.width = 1600
     app.height = 900
+    app.setMaxShapeCount(3000)
     #program
     app.program = 0
 
@@ -113,7 +124,7 @@ def solverScreen_onScreenActivate(app):
     app.cy = app.height/2
     app.offsetX = 0
     app.offsetY = 0
-    app.scale = 1
+    app.scale = 10
     app.startingPoint = None
     app.edges = dict() #key: edge number; value:  list of points
     #program 1: mesh
@@ -140,6 +151,10 @@ def solverScreen_onScreenActivate(app):
     app.loadedSegment = None
     app.forceMagnitude = None
     app.forceDirection = None
+    #program 5: Solver
+    app.solved = False
+    app.maxVonMises = None
+    app.minVonMises = None  
     #extra one time processes
     app.buttons = createMenuButtons(app)
     createOtherButtons(app)
@@ -161,6 +176,8 @@ def solverScreen_redrawAll(app):
     drawUniqueFeatures(app)
     drawOutlines(app)
     if app.isMeshed and app.program == 1:
+        drawMesh(app)
+    elif app.solved and app.program == 5:
         drawMesh(app)
 
 #drawing functions
@@ -242,14 +259,18 @@ def drawInstructions(app):
         drawLabel('Select type of Material', app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
     elif app.program == 3:
-        drawLabel('Click or drag to select', app.width - 150, 450, 
+        drawLabel('Click to select fixed', app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
-        drawLabel('fixed edges', app.width - 150, 490, fill=textColor, 
+        drawLabel('edges', app.width - 150, 490, fill=textColor, 
                   font='Burger Crunchy', size=22)
     elif app.program == 4:
         drawLabel("Press which edge to load", app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
         drawLabel("and type in magnitude (N)", app.width - 150, 490, 
+                  fill=textColor, font='Burger Crunchy', size=22)
+        drawLabel("and direction (degrees,", app.width - 150, 530, 
+                  fill=textColor, font='Burger Crunchy', size=22)
+        drawLabel("0 is right)", app.width - 150, 570, 
                   fill=textColor, font='Burger Crunchy', size=22)
     elif app.program == 5:
         drawLabel("Press 'solve' to solve!", app.width - 150, 450, 
@@ -284,11 +305,16 @@ def drawUniqueFeatures(app):
             drawLine(*points, fill=app.loadedSegment.color, 
                      lineWidth=app.loadedSegment.width)
     elif app.program == 5:
-        if app.programRequirements[5]:
+        if app.programRequirements[5] and not app.solved:
             app.solveButton.color = 'limeGreen'
         else:
             app.solveButton.color = rgb(50, 50, 50)
         app.solveButton.draw()
+        if app.solved:
+            drawLabel(f'Max vonMises:', app.width - 150, 600,
+                      fill='limeGreen', size=18, font='Burger Crunchy')
+            drawLabel(f'{app.maxVonMises} Pa', app.width - 150, 620,
+                      fill='limeGreen', size=18, font='Burger Crunchy')
 
 def drawOutlines(app):
     drawRect(0, 0, app.width, app.height, fill=None, border=rgb(50, 50, 50), 
@@ -318,13 +344,15 @@ def assembleEdges(app):
         return
     point_index = dict() #key: point; value: edge # that includes points
     for entity in app.drawableDXF:
-        segments = getSegments(app, entity) #also adds segments to app.segments
+        segments = getSegments(entity) #also adds segments to app.segments
         if segments != None:
             for segment in segments:
                 p1, p2 = segment.points
+                if p2 < p1: #all points lexographically ordered
+                    p1, p2 = p2, p1
                 addSegment(roundPoint(p1), roundPoint(p2), app.edges, 
                            point_index) #adds segments to edges and point_index dicts
-    simplifyTolerance = 0.1
+    simplifyTolerance = 0.5
     for edge in app.edges:
         edgePoints = app.edges[edge]
         simplifiedPolygon = Polygon(edgePoints).simplify(tolerance=
@@ -340,7 +368,7 @@ def assembleEdges(app):
 #Source, written by claude.ai
 def roundPoint(p, decimals=3):
     scale = 10 ** decimals
-    return (math.floor(p[0] * scale) / scale, math.floor(p[1] * scale) / scale)
+    return (rounded(p[0] * scale) / scale, rounded(p[1] * scale) / scale)
 #Source: written by claude.ai with modifications
 def addSegment(p1, p2, edges, point_index):
     edgeA = point_index.get(p1)
@@ -352,12 +380,18 @@ def addSegment(p1, p2, edges, point_index):
         point_index[p1] = edgeID
         point_index[p2] = edgeID
     elif edgeA is not None and edgeB is None:
-        # p1 connects to an existing edge, append p2
-        edges[edgeA].append(p2)
+        # p1 connects to an existing edge, append or prepend p2
+        if edges[edgeA][-1] == p1:
+            edges[edgeA].append(p2)
+        elif edges[edgeA][0] == p1:
+            edges[edgeA].insert(0, p2)
         point_index[p2] = edgeA
     elif edgeA is None and edgeB is not None:
-        # p2 on existing edge, insert p1 at the beginning
-        edges[edgeB].insert(0, p1)
+        # p2 on existing edge, append or prepend p1
+        if edges[edgeB][-1] == p2:
+            edges[edgeB].append(p1)
+        elif edges[edgeB][0] == p2:
+            edges[edgeB].insert(0, p1)
         point_index[p1] = edgeB
     elif edgeA != edgeB:
         # merge the two edges
@@ -375,7 +409,7 @@ def addSegment(p1, p2, edges, point_index):
             point_index[p] = edgeA
         del edges[edgeB]
                  
-def getSegments(app, entity): #returns list of segments, adds segments to app.segments
+def getSegments(entity): #returns list of segments, adds segments to app.segments
     entitySegments = []
     if entity.dxftype() == 'LINE':
         p1 = (entity.dxf.start[0], entity.dxf.start[1])
@@ -477,7 +511,7 @@ def circleToEdges(entity):
     cx = entity.dxf.center.x
     cy = entity.dxf.center.y
     r = entity.dxf.radius
-    points = 16
+    points = 32
     for i in range(points):
         angle1 = 2 * math.pi * (i/points)
         angle2 = 2 * math.pi * ((i+1)/points) # 1 step over
@@ -552,7 +586,7 @@ def getMeshSize(app):
     #scale value is 5.28 from 0-180 to 50-1000
     numElements = getCurrentMeshElements(app)
     meshSize = area/numElements
-    return meshSize
+    return max(meshSize, 0.01) #claude ai, to help with very small meshes
 
 def getCurrentMeshElements(app):
     currX = app.sliderButton.left - 999 #1 minimum
@@ -584,7 +618,144 @@ def getDirection(app, message):
         return float(userInput) % 360
     except ValueError:
         return getDirection(app, 'Invalid input. Please try again')
+
+#Solver Code (ALL EXEMPT, source: claude.ai)
+def solve(app):
+    E, nu = app.selectedMaterial
+    n = len(app.nodes)
+    usedNodes = set()
+    for element in app.elements:
+        for node in element.nodes:
+            usedNodes.add(node)
+    K = np.zeros((2*n, 2*n))
+    F = np.zeros(2*n)
+    for element in app.elements:
+        Ke = getElementStiffness(element, E, nu)
+        assembleElement(K, Ke, element, app.nodes)
+    applyForce(app, F)
+    fixedDOFs = getFixedDOFs(app)
+    applyBoundaryConditions(K, F, fixedDOFs)
+    zeroDiags = [i for i in range(2*n) if K[i,i] == 0]
+
+    U = np.linalg.solve(K, F)
+    for i, node in enumerate(app.nodes):
+        node.displacementX = U[2*i]
+        node.displacementY = U[2*i + 1]
+    computeStresses(app)
+    app.maxVonMises = max(element.vonMises for element in app.elements)
+    app.minVonMises = min(element.vonMises for element in app.elements)
+
+def getElementStiffness(element, E, nu):
+    t = 1
+    x1, y1 = element.nodes[0].x, element.nodes[0].y
+    x2, y2 = element.nodes[1].x, element.nodes[1].y
+    x3, y3 = element.nodes[2].x, element.nodes[2].y
+    A = 0.5 * abs((x2 - x1)*(y3 - y1) - (x3 - x1)*(y2 - y1))
+    if A == 0:
+        return np.zeros((6, 6))
+    b1, b2, b3 = y2 - y3, y3 - y1, y1 - y2
+    c1, c2, c3 = x3 - x2, x1 - x3, x2 - x1
+    B = (1/(2*A)) * np.array([
+        [b1,  0, b2,  0, b3,  0],
+        [ 0, c1,  0, c2,  0, c3],
+        [c1, b1, c2, b2, c3, b3]
+    ])
+    D = (E / (1 - nu**2)) * np.array([
+        [1,  nu,          0],
+        [nu,  1,          0],
+        [0,   0, (1-nu)/2  ]
+    ])
+    return t * A * (B.T @ D @ B)
+
+def assembleElement(K, Ke, element, nodes):
+    dofs = []
+    for node in element.nodes:
+        i = nodes.index(node)
+        dofs.extend([2*i, 2*i + 1])
+    for i, gi in enumerate(dofs):
+        for j, gj in enumerate(dofs):
+            K[gi][gj] += Ke[i][j]
+
+def applyForce(app, F):
+    angle = math.radians(app.forceDirection)
+    fx = app.forceMagnitude * math.cos(angle)
+    fy = app.forceMagnitude * math.sin(angle)
+
+    loadedNodes = getNodesOnSegment(app, app.loadedSegment)
+    for node in loadedNodes:
+        i = app.nodes.index(node)
+        F[2*i]     += fx / len(loadedNodes)
+        F[2*i + 1] += fy / len(loadedNodes)
+
+def getFixedDOFs(app):
+    fixedDOFs = set()
+     # fix nodes not connected to any element
+    usedNodes = set()
+    for element in app.elements:
+        for node in element.nodes:
+            usedNodes.add(node)
+    for i, node in enumerate(app.nodes):
+        if node not in usedNodes:
+            fixedDOFs.add(2*i)
+            fixedDOFs.add(2*i + 1)
     
+    # fix nodes on fixed segments
+    for segment in app.fixedSegments:
+        nodes = getNodesOnSegment(app, segment)
+        for node in nodes:
+            i = app.nodes.index(node)
+            fixedDOFs.add(2*i)
+            fixedDOFs.add(2*i + 1)
+    return fixedDOFs
+
+def applyBoundaryConditions(K, F, fixedDOFs):
+    for dof in fixedDOFs:
+        K[dof, :] = 0
+        K[:, dof] = 0
+        K[dof, dof] = 1
+        F[dof] = 0
+
+def getNodesOnSegment(app, segment):
+    p1, p2 = segment.points
+    line = LineString([p1, p2])
+    return [node for node in app.nodes 
+            if Point(node.x, node.y).distance(line) < 0.1]
+
+def computeStresses(app):
+    E, nu = app.selectedMaterial
+    D = (E / (1 - nu**2)) * np.array([
+        [1,  nu,        0],
+        [nu,  1,        0],
+        [0,   0, (1-nu)/2]
+    ])
+    for element in app.elements:
+        x1, y1 = element.nodes[0].x, element.nodes[0].y
+        x2, y2 = element.nodes[1].x, element.nodes[1].y
+        x3, y3 = element.nodes[2].x, element.nodes[2].y
+        A = 0.5 * abs((x2 - x1)*(y3 - y1) - (x3 - x1)*(y2 - y1))
+        if A == 0:
+            continue
+        b1, b2, b3 = y2 - y3, y3 - y1, y1 - y2
+        c1, c2, c3 = x3 - x2, x1 - x3, x2 - x1
+        B = (1/(2*A)) * np.array([
+            [b1,  0, b2,  0, b3,  0],
+            [ 0, c1,  0, c2,  0, c3],
+            [c1, b1, c2, b2, c3, b3]
+        ])
+        # Element displacement vector
+        u = np.array([
+            element.nodes[0].displacementX, element.nodes[0].displacementY,
+            element.nodes[1].displacementX, element.nodes[1].displacementY,
+            element.nodes[2].displacementX, element.nodes[2].displacementY,
+        ])
+        stress = D @ B @ u
+        element.stressX  = stress[0]
+        element.stressY  = stress[1]
+        element.stressXY = stress[2]
+        element.vonMises = math.sqrt(stress[0]**2 - stress[0]*stress[1] +
+                                     stress[1]**2 + 3*stress[2]**2)
+# all EXEMPT ^^
+
 #Controllers
 def titleScreen_onMouseMove(app, mouseX, mouseY):
     if app.titleButton.isSelected(mouseX, mouseY):
@@ -635,6 +806,12 @@ def solverScreen_onMousePress(app, mouseX, mouseY):
                 app.program = button.id
             elif app.isMeshed:
                 app.program = button.id
+    #check for final solver
+    if (app.isMeshed and app.selectedMaterial != None and app.fixedSegments 
+        != [] and app.forceMagnitude != None):
+        app.programRequirements[5] = True
+    else:
+        app.programRequirements[5] = False
     #drawing setup
     if app.program == 0 and not app.isMeshed:
         app.startingPoint = mouseX, mouseY
@@ -680,11 +857,11 @@ def solverScreen_onMousePress(app, mouseX, mouseY):
                         None):
                         app.loadedSegment = segment
                         app.programRequirements[4] = True
-    if (app.isMeshed and app.selectedMaterial != None and app.fixedSegments 
-        != [] and app.forceMagnitude != None):
-        app.programRequirements[5] = True
-    else:
-        app.programRequirements[5] = False
+    elif app.program == 5:
+        if (app.solveButton.isSelected(mouseX, mouseY) and 
+            app.programRequirements[5] and not app.solved):
+            solve(app)
+            app.solved = True
         
 def solverScreen_onMouseDrag(app, mouseX, mouseY):
     if app.program == 0 and not app.isMeshed:
@@ -726,6 +903,7 @@ def solverScreen_onMouseMove(app, mouseX, mouseY):
                     button.isHovering = True
                 else:
                     button.isHovering = False
+
 def main():
     runAppWithScreens(initialScreen='titleScreen')
 
