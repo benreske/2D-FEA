@@ -87,7 +87,6 @@ class Node:
 
 def onAppStart(app):
     #files
-    app.file = None
     app.drawableDXF = None
     #drawing
     app.width = 1600
@@ -97,7 +96,6 @@ def onAppStart(app):
 
 def restartApp(app):
     #files
-    app.file = None
     app.drawableDXF = None
     #program
     app.program = 0
@@ -326,9 +324,11 @@ def assembleEdges(app):
                 p1, p2 = segment.points
                 addSegment(roundPoint(p1), roundPoint(p2), app.edges, 
                            point_index) #adds segments to edges and point_index dicts
+    simplifyTolerance = 0.1
     for edge in app.edges:
         edgePoints = app.edges[edge]
-        simplifiedPolygon = Polygon(edgePoints).simplify(tolerance=0.1)
+        simplifiedPolygon = Polygon(edgePoints).simplify(tolerance=
+                                                         simplifyTolerance)
         simplifiedPoints = list(simplifiedPolygon.exterior.coords)
         app.edges[edge] = simplifiedPoints
         #written by claude.ai
