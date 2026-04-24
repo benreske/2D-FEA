@@ -8,6 +8,7 @@ from tkinter import filedialog
 import triangle as tr
 from shapely.geometry import Polygon, Point, LineString
 from shapely.ops import unary_union
+import turtle
 
 ##SOURCE: claude.ai written code for tkinter
 def getFilePath():
@@ -26,7 +27,7 @@ def getDXF():
         file = ezdxf.readfile(filePath)
         return file.modelspace()
     except IOError:
-        print(f"Generic I/O error. Please check the file path and try again.")
+        print(f"Could not read file.")
         return None
     except ezdxf.DXFStructureError:
         print(f'''Invalid or corrupted DXF file. Please select a valid DXF file 
@@ -65,30 +66,15 @@ class Segment:
         self.color = 'yellow'
         self.width = 3
 
-class Node:
-    def __init__(self, x, y):
-        self.x = x
-        self.y = y
-        self.onSegment = False
-        self.segments = []
-
 class Element:
     def __init__(self, node1, node2, node3):
         self.nodes = [node1, node2, node3]
         self.matrix = None
     
     def draw(self, app):
-        initialPoints = [(self.nodes[0].x, self.nodes[0].y), (self.nodes[1].x, 
-                        self.nodes[1].y), (self.nodes[2].x, self.nodes[2].y)]
+        initialPoints = [(node.x, node.y) for node in self.nodes]
         points = flattenDraw(app, initialPoints)
         drawPolygon(*points, fill=None, border='cyan', borderWidth=1)
-    
-    @staticmethod
-    def unpackNodes(nodes):
-        result = []
-        for node in nodes:
-            result.extend([node.x, node.y])
-        return result
     
 class Node:
     def __init__(self, x, y):
@@ -154,8 +140,8 @@ def solverScreen_onScreenActivate(app):
     app.fixedSegments = [] #list of fixed segments
     #program 4: loads
     app.loadedSegment = None
-    app.forceMagnitude = 0
-    app.forceDirection = (0, 0)
+    app.forceMagnitude = None
+    app.forceDirection = None
     #extra one time processes
     app.buttons = createMenuButtons(app)
     createOtherButtons(app)
@@ -163,9 +149,6 @@ def solverScreen_onScreenActivate(app):
     assembleEdges(app)
     app.currentMeshElements = rounded(getCurrentMeshElements(app))
     #program progress
-    def allRequirementsReady():
-        return (app.isMeshed and app.selectedMaterial != None and
-                app.fixedBoundaries != [] and app.forceMagnitude != 0)
     app.programRequirements = [False for i in range(6)]
     
 def titleScreen_redrawAll(app):
@@ -188,27 +171,27 @@ def createMenuButtons(app): #creates all buttons, returns main menu buttons
                      'Boundary Conditions', 'Loads', 'Solve']
     buttons = []
     for i in range(len(programNames)):
-        button = Button(app.left + app.width - 300, i*50, 300, 50, 
+        button = Button(app.width - 300, i*50, 300, 50, 
                         programNames[i], rgb(30, 30, 30), i)
         buttons.append(button)
     return buttons
 
 def createOtherButtons(app):
-    app.meshButton = Button(app.left + app.width - 300, 700, 300, 50, 'MESH!',
+    app.meshButton = Button(app.width - 300, 700, 300, 50, 'MESH!',
                             'limeGreen', -1)
-    app.sliderButton = Button(app.left + app.width - 510, 50, 20, 20, None,
+    app.sliderButton = Button(app.width - 510, 50, 20, 20, None,
                               rgb(75, 75, 75), -1)
-    app.solveButton = Button(app.left + app.width - 300, 700, 300, 50, 'SOLVE!',
+    app.solveButton = Button(app.width - 300, 700, 300, 50, 'SOLVE!',
                             'limeGreen', -1)
-    app.singleMaterialButton = Button(app.left + app.width - 300, 500, 300, 35,
+    app.singleMaterialButton = Button(app.width - 300, 490, 300, 40,
                                       'Select a Material', rgb(50, 50, 50), -1)
-    app.resetButton = Button(app.left + app.width - 300, 700, 300, 50, 'Reset',
+    app.resetButton = Button(app.width - 300, 700, 300, 50, 'Reset',
                              rgb(50, 50, 50), -1)
 
 def createMaterialButtons(app):
     materialNames = [key for key in app.materialLibrary]
     for i in range(len(app.materialLibrary)):
-        button = Button(app.left + app.width - 300, 530 + i*35, 300, 35, 
+        button = Button(app.width - 300, 530 + i*40, 300, 40, 
                         materialNames[i], rgb(30, 30, 30), -1)
         app.materialButtons.append(button)
 
@@ -216,7 +199,7 @@ def drawBackground(app):
     drawRect(0, 0, app.width, app.height, fill=rgb(25, 25, 25))
 
 def drawSidebar(app):
-    drawRect(app.left + app.width - 300, 0, 300, app.height, 
+    drawRect(app.width - 300, 0, 300, app.height, 
              fill=rgb(30, 30, 30))
     for button in app.buttons:
         if button.id == app.program: #selected stage takes precedence
@@ -239,46 +222,45 @@ def drawSidebar(app):
     
 def drawInstructions(app):
     textColor = 'lightSteelBlue'
-    drawLabel("Press 'R' to restart", app.left + app.width - 150, 860, 
+    drawLabel("Press 'R' to restart", app.width - 150, 860, 
               fill=textColor, font='Burger Crunchy', size=14)
-    drawLabel('Instructions:', app.left + app.width - 150, 400, italic=True,
+    drawLabel('Instructions:', app.width - 150, 400, italic=True,
               fill=textColor, bold=True, size=27, font='Burger Crunchy')
     if app.program == 0:
-        drawLabel('Drag and Resize Shape', app.left + app.width - 150, 450, 
+        drawLabel('Drag and Resize Shape', app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
-        drawLabel('-/+ to change size', app.left + app.width - 150, 490, 
+        drawLabel('-/+ to change size', app.width - 150, 490, 
                   fill=textColor, font='Burger Crunchy', size=22)
     elif app.program == 1:
-        drawLabel('Drag slider to change', app.left + app.width - 150, 450, 
+        drawLabel('Drag slider to change', app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
-        drawLabel('element size', app.left + app.width - 150, 490, 
+        drawLabel('element size', app.width - 150, 490, 
                   fill=textColor, font='Burger Crunchy', size=22)
-        drawLabel("Press 'mesh' when ready", app.left + app.width - 150, 530,
+        drawLabel("Press 'mesh' when ready", app.width - 150, 530,
                   fill=textColor, font='Burger Crunchy', size=22)
-        drawLabel(f'Mesh Elements: {app.currentMeshElements}', app.left + 
-                  app.width - 500, 30, size=14, font='Burger Crunchy', 
-                  fill=textColor)
+        drawLabel(f'Mesh Elements: {app.currentMeshElements}', app.width - 500, 
+                  30, size=14, font='Burger Crunchy', fill=textColor)
     elif app.program == 2:
-        drawLabel('Select type of Material', app.left + app.width - 150, 450, 
+        drawLabel('Select type of Material', app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
     elif app.program == 3:
-        drawLabel('Click or drag to select', app.left + app.width - 150, 450, 
+        drawLabel('Click or drag to select', app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
-        drawLabel('fixed edges', app.left + app.width - 150, 490, 
-                  fill=textColor, font='Burger Crunchy', size=22)
+        drawLabel('fixed edges', app.width - 150, 490, fill=textColor, 
+                  font='Burger Crunchy', size=22)
     elif app.program == 4:
-        drawLabel("Press which edge to load", app.left + app.width - 150, 450, 
+        drawLabel("Press which edge to load", app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
-        drawLabel("and type in magnitude (N)", app.left + app.width - 150, 490, 
+        drawLabel("and type in magnitude (N)", app.width - 150, 490, 
                   fill=textColor, font='Burger Crunchy', size=22)
     elif app.program == 5:
-        drawLabel("Press 'solve' to solve!", app.left + app.width - 150, 450, 
+        drawLabel("Press 'solve' to solve!", app.width - 150, 450, 
                   fill=textColor, font='Burger Crunchy', size=22)
 
 def drawUniqueFeatures(app):
     if app.program == 1:
         app.meshButton.draw()
-        drawRect(app.left + app.width - 600, 50, 200, 20, fill=rgb(150, 150, 
+        drawRect(app.width - 600, 50, 200, 20, fill=rgb(150, 150, 
                  150))
         app.sliderButton.draw()
     elif app.program == 2:
@@ -298,15 +280,22 @@ def drawUniqueFeatures(app):
                      lineWidth=segment.width)
     elif app.program == 4:
         app.resetButton.draw()
-        if app.loadedSegment != None:
+        if (app.loadedSegment != None and app.forceDirection != None and 
+            app.forceMagnitude != None):
             points = flattenDraw(app, app.loadedSegment.points)
             drawLine(*points, fill=app.loadedSegment.color, 
                      lineWidth=app.loadedSegment.width)
+    elif app.program == 5:
+        if app.programRequirements[5]:
+            app.solveButton.color = 'limeGreen'
+        else:
+            app.solveButton.color = rgb(50, 50, 50)
+        app.solveButton.draw()
 
 def drawOutlines(app):
     drawRect(0, 0, app.width, app.height, fill=None, border=rgb(50, 50, 50), 
              borderWidth=1)
-    drawRect(app.left + app.width - 300, 0, 300, app.height, fill=None, 
+    drawRect(app.width - 300, 0, 300, app.height, fill=None, 
              border=rgb(50, 50, 50), borderWidth=1)
 
 def flattenDraw(app, points):
@@ -339,9 +328,15 @@ def assembleEdges(app):
                            point_index) #adds segments to edges and point_index dicts
     for edge in app.edges:
         edgePoints = app.edges[edge]
-        simplifiedPolygon = Polygon(edgePoints).simplify(tolerance=0.5)
+        simplifiedPolygon = Polygon(edgePoints).simplify(tolerance=0.1)
         simplifiedPoints = list(simplifiedPolygon.exterior.coords)
         app.edges[edge] = simplifiedPoints
+        #written by claude.ai
+        for i in range(len(simplifiedPoints) - 1):
+            p1 = simplifiedPoints[i]
+            p2 = simplifiedPoints[i + 1]
+            segment = Segment(p1, p2)
+            app.allSegments.append(segment)
 #Source, written by claude.ai
 def roundPoint(p, decimals=3):
     scale = 10 ** decimals
@@ -387,31 +382,24 @@ def getSegments(app, entity): #returns list of segments, adds segments to app.se
         p2 = (entity.dxf.end[0], entity.dxf.end[1])
         segment = Segment(p1, p2)
         entitySegments.append(segment)
-        app.allSegments.append(segment)
     elif entity.dxftype() == 'ARC':
         segments = arcToSegments(entity)
         entitySegments.extend(segments)
-        app.allSegments.extend(segments)
     elif entity.dxftype() == 'LWPOLYLINE':
         segments = lwPolylineToSegments(entity)
         entitySegments.extend(segments)
-        app.allSegments.extend(segments)
     elif entity.dxftype() == 'POLYLINE':
         segments = polylineToSegments(entity)
         entitySegments.extend(segments)
-        app.allSegments.extend(segments)
     elif entity.dxftype() == 'SPLINE':
         segments = splineToSegments(entity)
         entitySegments.extend(segments)
-        app.allSegments.extend(segments)
     elif entity.dxftype() == 'ELLIPSE':
         segments = ellipseToSegments(entity)
         entitySegments.extend(segments)
-        app.allSegments.extend(segments)
     elif entity.dxftype() == 'CIRCLE':
         segments = circleToEdges(entity)
         entitySegments.extend(segments)
-        app.allSegments.extend(segments)
     return entitySegments
 
 def isDrawable(entity):
@@ -578,8 +566,25 @@ def isSegmentClicked(app, segment, mouseX, mouseY):
     line = LineString([p1, p2])
     point = Point(mouseX, mouseY)
     return point.distance(line) <= 5
+#partially written by claude.ai (try/except syntax)
+def getMagnitude(app, message):
+    userInput = app.getTextInput(message)
+    if userInput == None: return None
+    try: 
+        float(userInput)
+        return float(userInput)
+    except ValueError:
+        return getMagnitude(app, 'Invalid input. Please try again')
 
-
+def getDirection(app, message):
+    userInput = app.getTextInput(message)
+    if userInput == None: return None
+    try: 
+        float(userInput)
+        return float(userInput) % 360
+    except ValueError:
+        return getDirection(app, 'Invalid input. Please try again')
+    
 #Controllers
 def titleScreen_onMouseMove(app, mouseX, mouseY):
     if app.titleButton.isSelected(mouseX, mouseY):
@@ -646,7 +651,7 @@ def solverScreen_onMousePress(app, mouseX, mouseY):
         if app.singleMaterialButton.isSelected(mouseX, mouseY):
             app.materialMenuOpen = not app.materialMenuOpen
         for button in app.materialButtons:
-            if button.isSelected(mouseX, mouseY):
+            if button.isSelected(mouseX, mouseY) and app.materialMenuOpen:
                 app.programRequirements[2] = True
                 app.selectedMaterial = app.materialLibrary[button.label]
                 app.singleMaterialButton.label = button.label
@@ -662,14 +667,24 @@ def solverScreen_onMousePress(app, mouseX, mouseY):
                     app.programRequirements[3] = True
     elif app.program == 4:
         if app.resetButton.isSelected(mouseX, mouseY):
-            app.loadedSegments = None
+            app.loadedSegment = None
             app.programRequirements[4] = False
         else:
             for segment in app.allSegments:
                 if isSegmentClicked(app, segment, mouseX, mouseY):
-                    app.loadedSegment = segment
-                    app.programRequirements[4] = True
-            
+                    app.forceMagnitude = getMagnitude(app, 
+                                                      'Force Magnitude (N):')
+                    app.forceDirection = getDirection(app, 'Force Direction '
+                                                      '(degrees):')
+                    if (app.forceMagnitude != None and app.forceDirection != 
+                        None):
+                        app.loadedSegment = segment
+                        app.programRequirements[4] = True
+    if (app.isMeshed and app.selectedMaterial != None and app.fixedSegments 
+        != [] and app.forceMagnitude != None):
+        app.programRequirements[5] = True
+    else:
+        app.programRequirements[5] = False
         
 def solverScreen_onMouseDrag(app, mouseX, mouseY):
     if app.program == 0 and not app.isMeshed:
