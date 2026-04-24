@@ -2,10 +2,11 @@ from cmu_graphics import *
 from cmu_cpcs_utils import *
 import math
 import ezdxf
+import sys
 import tkinter as tk
 from tkinter import filedialog
 import triangle as tr
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point, LineString
 from shapely.ops import unary_union
 
 ##SOURCE: claude.ai written code for tkinter
@@ -61,9 +62,8 @@ class Button:
 class Segment:
     def __init__(self, p1, p2):
         self.points = [p1, p2] # list of two tuples
-        self.loadType = None
-        self.loadMagnitude = 0
-        self.edgeNumber = 0
+        self.color = 'yellow'
+        self.width = 3
 
 class Node:
     def __init__(self, x, y):
@@ -97,6 +97,8 @@ class Node:
         self.displacementX = 0
         self.displacementY = 0
 
+#Source: partially helped by claude.ai
+
 def onAppStart(app):
     #files
     app.file = None
@@ -107,7 +109,7 @@ def onAppStart(app):
     #program
     app.program = 0
 
-def onAppRestart(app):
+def restartApp(app):
     #files
     app.file = None
     app.drawableDXF = None
@@ -122,37 +124,49 @@ def titleScreen_onScreenActivate(app):
 def solverScreen_onScreenActivate(app):
     #files
     app.drawableDXF = getDXF()
-    #drawing
-    app.buttons = createMenuButtons(app)
-    createOtherButtons(app)
+    #program 0: draw
     app.cx = app.width/2
     app.cy = app.height/2
     app.offsetX = 0
     app.offsetY = 0
     app.scale = 1
     app.startingPoint = None
-    app.meshElementCounter = None
-    #data
     app.edges = dict() #key: edge number; value:  list of points
+    #program 1: mesh
+    app.meshElementCounter = None
     app.allSegments = []
     app.nodes = []
     app.elements = []
-    app.currentMeshElements = rounded(getCurrentMeshElements(app))
+    app.isMeshed = False
+    #program 2: material selection
     app.materials = []
+    app.materialMenuOpen = False
+    app.materialButtons = []
     app.selectedMaterial = None
-    app.fixedBoundaries = [] #list of fixed segments
+    app.materialLibraryNames = ['Stainless Steel', '6601 Aluminum', 'Titanium',
+                                'PLA']
+    app.materialLibrary = {'Stainless Steel': (192, 0.29),
+                           '6601 Aluminum' : (69, 0.33),
+                           'Titanium' : (120, 0.36),
+                           'PLA' : (2.645, 0.33)
+                          }
+    #program 3: boundary conditions
+    app.fixedSegments = [] #list of fixed segments
+    #program 4: loads
+    app.loadedSegment = None
     app.forceMagnitude = 0
     app.forceDirection = (0, 0)
-    #collect data from dxf file and organize into edges and circles
+    #extra one time processes
+    app.buttons = createMenuButtons(app)
+    createOtherButtons(app)
+    createMaterialButtons(app)
     assembleEdges(app)
-    #Program Manager
-    app.isMeshed = False
+    app.currentMeshElements = rounded(getCurrentMeshElements(app))
+    #program progress
     def allRequirementsReady():
         return (app.isMeshed and app.selectedMaterial != None and
                 app.fixedBoundaries != [] and app.forceMagnitude != 0)
-    app.programRequirements = [False, app.isMeshed, app.selectedMaterial != None,
-                               app.fixedBoundaries != [], app.forceMagnitude != 0,
-                               allRequirementsReady()]
+    app.programRequirements = [False for i in range(6)]
     
 def titleScreen_redrawAll(app):
     drawRect(0, 0, app.width, app.height, fill=rgb(25, 25, 25))
@@ -180,12 +194,23 @@ def createMenuButtons(app): #creates all buttons, returns main menu buttons
     return buttons
 
 def createOtherButtons(app):
-    app.meshButton = Button(app.left + app.width - 300, 800, 300, 50, 'MESH!',
-                            'limeGreen', 6)
+    app.meshButton = Button(app.left + app.width - 300, 700, 300, 50, 'MESH!',
+                            'limeGreen', -1)
     app.sliderButton = Button(app.left + app.width - 510, 50, 20, 20, None,
-                              rgb(75, 75, 75), 7)
-    app.solveButton = Button(app.left + app.width - 300, 800, 300, 50, 'SOLVE!',
-                            'limeGreen', 6)
+                              rgb(75, 75, 75), -1)
+    app.solveButton = Button(app.left + app.width - 300, 700, 300, 50, 'SOLVE!',
+                            'limeGreen', -1)
+    app.singleMaterialButton = Button(app.left + app.width - 300, 500, 300, 35,
+                                      'Select a Material', rgb(50, 50, 50), -1)
+    app.resetButton = Button(app.left + app.width - 300, 700, 300, 50, 'Reset',
+                             rgb(50, 50, 50), -1)
+
+def createMaterialButtons(app):
+    materialNames = [key for key in app.materialLibrary]
+    for i in range(len(app.materialLibrary)):
+        button = Button(app.left + app.width - 300, 530 + i*35, 300, 35, 
+                        materialNames[i], rgb(30, 30, 30), -1)
+        app.materialButtons.append(button)
 
 def drawBackground(app):
     drawRect(0, 0, app.width, app.height, fill=rgb(25, 25, 25))
@@ -211,9 +236,11 @@ def drawSidebar(app):
         if not app.isMeshed and button.id >= 2: #gray out buttons that aren't accessible
             button.textColor = rgb(90, 90, 90)
         button.draw()
-
+    
 def drawInstructions(app):
     textColor = 'lightSteelBlue'
+    drawLabel("Press 'R' to restart", app.left + app.width - 150, 860, 
+              fill=textColor, font='Burger Crunchy', size=14)
     drawLabel('Instructions:', app.left + app.width - 150, 400, italic=True,
               fill=textColor, bold=True, size=27, font='Burger Crunchy')
     if app.program == 0:
@@ -254,12 +281,33 @@ def drawUniqueFeatures(app):
         drawRect(app.left + app.width - 600, 50, 200, 20, fill=rgb(150, 150, 
                  150))
         app.sliderButton.draw()
+    elif app.program == 2:
+        if app.materialMenuOpen:
+            for button in app.materialButtons:
+                if button.isHovering: 
+                    button.color = rgb(50, 50, 50)
+                else:
+                    button.color = rgb(30, 30, 30)
+                button.draw()
+        app.singleMaterialButton.draw()
+    elif app.program == 3:
+        app.resetButton.draw()
+        for segment in app.fixedSegments:
+            points = flattenDraw(app, segment.points)
+            drawLine(*points, fill=segment.color, 
+                     lineWidth=segment.width)
+    elif app.program == 4:
+        app.resetButton.draw()
+        if app.loadedSegment != None:
+            points = flattenDraw(app, app.loadedSegment.points)
+            drawLine(*points, fill=app.loadedSegment.color, 
+                     lineWidth=app.loadedSegment.width)
 
 def drawOutlines(app):
     drawRect(0, 0, app.width, app.height, fill=None, border=rgb(50, 50, 50), 
              borderWidth=1)
-    drawRect(app.left + app.width - 300, 0, 300, app.height, fill=None, border=rgb(50, 50, 50), 
-             borderWidth=1)
+    drawRect(app.left + app.width - 300, 0, 300, app.height, fill=None, 
+             border=rgb(50, 50, 50), borderWidth=1)
 
 def flattenDraw(app, points):
     result = []
@@ -276,7 +324,6 @@ def drawDXF(app):
     for edge in app.edges:
         points = flattenDraw(app, app.edges[edge])
         drawPolygon(*points, fill=None, border='white', borderWidth=2)  
-
 
 #Assembling DXF
 def assembleEdges(app):
@@ -517,12 +564,21 @@ def getMeshSize(app):
     #scale value is 5.28 from 0-180 to 50-1000
     numElements = getCurrentMeshElements(app)
     meshSize = area/numElements
-    print(f'Area: {area}, MeshSize: {meshSize}, numElements: {numElements}')
     return meshSize
 
 def getCurrentMeshElements(app):
     currX = app.sliderButton.left - 999 #1 minimum
     return 50 + 5.28 * currX
+
+#Other Functions
+#Source: claude.ai
+def isSegmentClicked(app, segment, mouseX, mouseY):
+    points = flattenDraw(app, segment.points) #to adjust to drawn points
+    p1, p2 = (points[0], points[1]), (points[2], points[3])
+    line = LineString([p1, p2])
+    point = Point(mouseX, mouseY)
+    return point.distance(line) <= 5
+
 
 #Controllers
 def titleScreen_onMouseMove(app, mouseX, mouseY):
@@ -557,6 +613,9 @@ def titleScreen_onMouseRelease(app, mouseX, mouseY):
         setDefaultButtonSize(app)
 
 def solverScreen_onKeyPress(app, key):
+    if key == 'R':
+        setActiveScreen('titleScreen')
+        restartApp(app)
     if app.program == 0 and not app.isMeshed:
         if key == '+' or key == '=':
             app.scale *= 1.1
@@ -581,8 +640,37 @@ def solverScreen_onMousePress(app, mouseX, mouseY):
         elif app.meshButton.isSelected(mouseX, mouseY) and not app.isMeshed:
             createMesh(app)
             app.isMeshed = True
+            app.programRequirements[1] = True
             app.meshButton.color = rgb(50, 50, 50)
-
+    elif app.program == 2:
+        if app.singleMaterialButton.isSelected(mouseX, mouseY):
+            app.materialMenuOpen = not app.materialMenuOpen
+        for button in app.materialButtons:
+            if button.isSelected(mouseX, mouseY):
+                app.programRequirements[2] = True
+                app.selectedMaterial = app.materialLibrary[button.label]
+                app.singleMaterialButton.label = button.label
+                app.materialMenuOpen = not app.materialMenuOpen
+    elif app.program == 3:
+        if app.resetButton.isSelected(mouseX, mouseY):
+            app.fixedSegments = []
+            app.programRequirements[3] = False
+        else:
+            for segment in app.allSegments:
+                if isSegmentClicked(app, segment, mouseX, mouseY):
+                    app.fixedSegments.append(segment)
+                    app.programRequirements[3] = True
+    elif app.program == 4:
+        if app.resetButton.isSelected(mouseX, mouseY):
+            app.loadedSegments = None
+            app.programRequirements[4] = False
+        else:
+            for segment in app.allSegments:
+                if isSegmentClicked(app, segment, mouseX, mouseY):
+                    app.loadedSegment = segment
+                    app.programRequirements[4] = True
+            
+        
 def solverScreen_onMouseDrag(app, mouseX, mouseY):
     if app.program == 0 and not app.isMeshed:
         startX, startY =app.startingPoint
@@ -616,8 +704,15 @@ def solverScreen_onMouseMove(app, mouseX, mouseY):
                 button.isHovering = True
         else:
             button.isHovering = False
-
+    if app.program == 2:
+        if app.materialMenuOpen:
+            for button in app.materialButtons:
+                if button.isSelected(mouseX, mouseY):
+                    button.isHovering = True
+                else:
+                    button.isHovering = False
 def main():
     runAppWithScreens(initialScreen='titleScreen')
 
 main()
+
